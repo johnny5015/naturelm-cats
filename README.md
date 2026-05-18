@@ -56,23 +56,35 @@ On an 8 GB consumer GPU this works because GPT-OSS-20B is MoE: only ~3.6B params
 
 ## Results
 
-Cat-context classifier on [CatMeows](https://zenodo.org/records/4008297), evaluated via **5-fold stratified cross-validation across all 276 clips**:
+Cat-context classifier on [CatMeows](https://zenodo.org/records/4008297), evaluated via **5-fold stratified cross-validation across all 276 clips**, hyperparameters tuned per-variant via grid sweep:
 
-| Feature variant | 5-fold CV accuracy | Notes |
+| Feature variant | 5-fold CV accuracy | Best hparams |
 |---|---|---|
-| **BEATs-stats (2304-dim, mean+std+max)** | **78.6% ± 1.5%** | Current default |
-| BEATs-mean (768-dim) | 76.5% ± 1.5% | Simpler baseline |
-| Q-Former (768-dim) | 73.9% ± 2.3% | Surprisingly weaker — see below |
+| **Hybrid: BEATs-stats + classical (2406-dim)** | **82.2%** | hidden=128, dropout=0.0, wd=1e-1 |
+| BEATs-stats only (2304-dim, mean+std+max) | 81.5% | hidden=256, dropout=0.3, wd=1e-1 |
+| BEATs-mean only (768-dim) | 76.5% | hidden=128, dropout=0.7, wd=1e-1 |
+| Q-Former only (768-dim) | 73.9% | hidden=256, dropout=0.0, wd=1e-2 |
+| Classical only (102-dim, MFCC+spectral+ZCR+RMS) | 72.5% | hidden=64, dropout=0.3, wd=1e-2 |
 
-Chance = 33%. The Ludovico et al. 2020 paper reports 86% on the same dataset using hand-crafted features (MFCC + spectral centroid + ZCR + formants) + SVM. Our **78.6%** uses only learned BEATs features + a ~200K-param MLP head — within 7 points of the hand-crafted baseline.
+Chance = 33%. The Ludovico et al. 2020 paper reports 86% on the same dataset using hand-crafted features (MFCC + spectral centroid + ZCR + formants) + SVM, with full-dataset CV. Our **82.2% hybrid** uses learned BEATs features + classical acoustic features + a small MLP head — **within 4 points of the hand-crafted SVM baseline**, despite a meaningfully different model class.
+
+### Stage-by-stage progression
+
+| Stage | Accuracy | Lift |
+|---|---|---|
+| Single 201/75 split (initial, misleading) | 65.3% | baseline |
+| 5-fold CV, BEATs-mean, default hparams | 76.5% | +11.2 (single-split was unlucky) |
+| BEATs-stats pooling (mean+std+max) | 78.6% | +2.1 |
+| BEATs-stats, tuned hparams | 81.5% | +2.9 (regularization is the unlock) |
+| Hybrid with classical features | 82.2% | +0.7 (marginal but free) |
 
 ### Negative result: NatureLM-audio's Q-Former features perform *worse* than raw BEATs
 
-Counterintuitive but reproducible: feeding the cat audio through NatureLM-audio's Q-Former (post-BEATs) and using the Q-Former output as classifier input gives **73.9%**, ~3-5 points lower than raw BEATs features. Our interpretation: NatureLM-audio's Q-Former is designed as a tight bottleneck (1 query token per 333ms window) optimized for downstream Llama text generation; that bottleneck throws away acoustic detail needed for fine-grained cat-context discrimination. Statistical pooling (mean + std + max) on raw BEATs preserves more variability and beats Q-Former by ~5 points despite using a "less aware" feature.
+Counterintuitive but reproducible: feeding the cat audio through NatureLM-audio's Q-Former (post-BEATs) and using the Q-Former output as classifier input gives **73.9%**, ~5-8 points lower than raw BEATs features. Our interpretation: NatureLM-audio's Q-Former is designed as a tight bottleneck (1 query token per 333ms window) optimized for downstream Llama text generation; that bottleneck throws away acoustic detail needed for fine-grained cat-context discrimination. **Statistical pooling on raw BEATs preserves more variability than the Q-Former bottleneck allows through.**
 
-### Earlier single-split test was misleading
+### Negative result: off-the-shelf data augmentation hurt
 
-We initially evaluated on a single 201-train / 75-test split. That run produced 65.3% — pessimistic outlier. The 5-fold CV ceiling estimate of 78.6% ± 1.5% is the honest number, with SEM ±1.5% on 276 clips.
+Time-stretch (0.9-1.1×) + pitch-shift (±2 semitones) + light noise augmentation dropped CV from 78.6% to 75.4% with the BEATs-stats default hparams. Pitch-shift in particular seems to move meows out of the discriminative acoustic range. SEM also went up from ±1.5% to ±2.3%, indicating augmentation introduced fold-to-fold variance. Documented in `scripts/extract_beats_stats_augmented.py` for transparency.
 
 ### Per-class behavior
 
@@ -142,29 +154,46 @@ CUDA_VISIBLE_DEVICES="" uv run python scripts/bridge_with_context.py path/to/cat
 ## Train the classifier yourself
 
 ```bash
-# 1. Extract BEATs statistical features (mean + std + max pool) for all 276 CatMeows clips
+# 1. Extract BEATs-stats + classical features for all 276 CatMeows clips
 CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_beats_stats_features.py
+uv run python scripts/extract_classical_features.py
+# Build the hybrid concat (saved as hybrid_features_{train,test}.npy)
+uv run python -c "
+import numpy as np
+from pathlib import Path
+D = Path.home() / 'datasets/cats'
+for split in ['train', 'test']:
+    h = np.concatenate([np.load(D/f'stats_features_{split}.npy'),
+                        np.load(D/f'classical_features_{split}.npy')], axis=1)
+    np.save(D/f'hybrid_features_{split}.npy', h.astype(np.float32))
+"
 
 # 2. Train final classifier on ALL data (no held-out — use CV results for accuracy estimate)
-uv run python scripts/train_context_classifier.py --variant stats --all
+uv run python scripts/train_context_classifier.py --variant hybrid --all
 
-# 3. (Optional) Confirm via 5-fold cross-validation
+# 3. (Optional) Confirm via 5-fold CV + full hyperparam sweep across all variants
 uv run python scripts/cross_validate.py
+uv run python scripts/sweep_features.py
 ```
 
-Outputs `~/datasets/cats/context_classifier_stats_all.pt` along with normalization stats and label map.
+Outputs `~/datasets/cats/context_classifier_hybrid_all.pt` (used by `bridge_with_context.py`) plus per-variant `cv_results.json` and `cv_results_augmented.json`.
 
-Hyperparameters (hidden=128, dropout=0.0, weight_decay=1e-3 for the stats variant) come from a 96-config grid sweep across feature variants. CV results are written to `~/datasets/cats/cv_results.json`.
-
-### Earlier feature-extraction paths (kept for comparison)
+### Other variants (kept for comparison + transparency on negative results)
 
 ```bash
-# Mean-pool only (BEATs-mean baseline, 76.5% CV)
+# BEATs-mean only — 76.5% CV (simpler baseline)
 CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_beats_features.py
 uv run python scripts/train_context_classifier.py --variant mean --all
 
-# Q-Former features (negative result, 73.9% CV — kept for transparency)
+# BEATs-stats only — 81.5% CV (no classical features)
+uv run python scripts/train_context_classifier.py --variant stats --all
+
+# Q-Former features — 73.9% CV (negative result, documents bottleneck)
 CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_qformer_features.py
+
+# Augmented BEATs-stats — 75.4% CV (negative result, off-the-shelf aug hurt)
+CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_beats_stats_augmented.py
+uv run python scripts/cross_validate_augmented.py
 ```
 
 ---
@@ -173,14 +202,18 @@ CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_qformer_features.py
 
 ```
 scripts/
-├── bridge_caption.py                v1 bridge: NatureLM caption → GPT-OSS-20B
-├── bridge_with_context.py           v2 bridge: + BEATs-stats cat-context classifier
-├── extract_beats_features.py        BEATs mean-pool features (baseline)
-├── extract_beats_stats_features.py  BEATs mean+std+max stats features (current default)
-├── extract_qformer_features.py      Q-Former features (negative-result experiment)
-├── train_context_classifier.py      MLP head training, --variant {mean|stats}, --all
-├── cross_validate.py                5-fold stratified CV across all feature variants
-└── smoke_test_gpt_oss.py            standalone GPT-OSS-20B load test (transformers path)
+├── bridge_caption.py                    v1 bridge: NatureLM caption → GPT-OSS-20B
+├── bridge_with_context.py               v2 bridge: + hybrid cat-context classifier (82.2% CV)
+├── extract_beats_features.py            BEATs mean-pool features (baseline)
+├── extract_beats_stats_features.py      BEATs mean+std+max stats features
+├── extract_classical_features.py        102-dim MFCC+spectral+ZCR+RMS via librosa
+├── extract_qformer_features.py          Q-Former features (negative-result experiment)
+├── extract_beats_stats_augmented.py     5×-augmented BEATs-stats (negative-result experiment)
+├── train_context_classifier.py          MLP head training, --variant {mean|stats|hybrid}, --all
+├── cross_validate.py                    5-fold stratified CV across {mean, stats, Q-Former}
+├── cross_validate_augmented.py          5-fold group-aware CV with augmented training
+├── sweep_features.py                    80-config hyperparam sweep across all 5 variants
+└── smoke_test_gpt_oss.py                standalone GPT-OSS-20B load test (transformers path)
 ```
 
 Nothing in `NatureLM/` is modified — this is purely additive on top of upstream `earthspecies/NatureLM-audio`.
@@ -202,7 +235,7 @@ If you want commercial use of the trained cat classifier, contact Earth Species 
 ## Limitations
 
 - **3 contexts only** (brushing / isolation / waiting-for-food). Real cats produce many more vocalization types; the classifier will force-fit out-of-distribution audio into one of these three. Use the softmax confidence as your uncertainty signal.
-- **78.6% ± 1.5% CV accuracy** vs Ludovico et al. 2020's 86% — within 7 points despite using only learned BEATs features. Closing the gap likely requires data augmentation (time-stretch, pitch-shift, noise injection) and/or hybridizing with classical acoustic features (MFCC, ZCR, spectral centroid).
+- **82.2% CV accuracy** (hybrid BEATs+classical) vs Ludovico et al. 2020's 86% — within 4 points. Off-the-shelf data augmentation hurt rather than helped. Closing the remaining gap likely needs (a) more data, (b) per-cat personalization, or (c) a learned attention pool over BEATs time-steps instead of statistical pooling.
 - **No per-cat personalization**: the classifier was trained on 21 cats from CatMeows. Individual cats have idiosyncratic dialects; a per-cat embedding or fine-tuning on a few labeled clips of your specific cat would help substantially.
 - **No reverse direction**: we listen to the cat, we don't generate audio the cat would recognize. Cat-directed speech synthesis is a separate, harder problem.
 

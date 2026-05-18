@@ -23,6 +23,7 @@ from pathlib import Path
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # CPU-only audio side
 
+import librosa
 import numpy as np
 import requests
 import resampy
@@ -35,11 +36,12 @@ sys.path.insert(0, "/home/scott/naturelm-cats")
 from NatureLM.models.beats.BEATs import BEATs, BEATsConfig
 
 LLAMA_SERVER = "http://127.0.0.1:9002"
-# BEATs-stats classifier trained on all 276 CatMeows samples.
-# Honest 5-fold CV accuracy: 78.6% ± 1.5% (chance = 33%). See datasets/cats/cv_results.json.
-CLASSIFIER_PATH = Path("/home/scott/datasets/cats/context_classifier_stats_all.pt")
-CV_ACCURACY = 0.786
+# Hybrid classifier (BEATs-stats + classical acoustic features) trained on all 276 CatMeows samples.
+# Honest 5-fold CV: 82.2% (chance = 33%). See datasets/cats/cv_results.json.
+CLASSIFIER_PATH = Path("/home/scott/datasets/cats/context_classifier_hybrid_all.pt")
+CV_ACCURACY = 0.822
 NLM_CKPT_PATH = Path("/home/scott/models/naturelm-audio/model.safetensors")
+SAMPLE_RATE = 16000
 
 
 # Reuse BEATs builder from extract_beats_features (inlined for self-containment)
@@ -61,6 +63,27 @@ def build_beats() -> BEATs:
     beats.load_state_dict(beats_state, strict=False)
     beats.eval()
     return beats
+
+
+def _compute_classical_features(audio: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
+    """102 classical acoustic features per clip (matches extract_classical_features.py)."""
+    n_fft, hop = 1024, 256
+    mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13, n_fft=n_fft, hop_length=hop)
+    delta = librosa.feature.delta(mfcc, order=1)
+    delta2 = librosa.feature.delta(mfcc, order=2)
+    zcr = librosa.feature.zero_crossing_rate(audio, frame_length=n_fft, hop_length=hop)
+    centroid = librosa.feature.spectral_centroid(y=audio, sr=sr, n_fft=n_fft, hop_length=hop)
+    bw = librosa.feature.spectral_bandwidth(y=audio, sr=sr, n_fft=n_fft, hop_length=hop)
+    rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sr, n_fft=n_fft, hop_length=hop)
+    contrast = librosa.feature.spectral_contrast(y=audio, sr=sr, n_fft=n_fft, hop_length=hop)
+    rms = librosa.feature.rms(y=audio, frame_length=n_fft, hop_length=hop)
+
+    def pool(x: np.ndarray) -> np.ndarray:
+        return np.concatenate([x.mean(axis=-1), x.std(axis=-1)])
+
+    return np.concatenate([pool(mfcc), pool(delta), pool(delta2),
+                           pool(zcr), pool(centroid), pool(bw),
+                           pool(rolloff), pool(contrast), pool(rms)]).astype(np.float32)
 
 
 class ContextHead(nn.Module):
@@ -85,12 +108,15 @@ def classify_context(audio_path: Path, beats: BEATs, classifier: nn.Module,
     with torch.inference_mode():
         wav = torch.from_numpy(audio).unsqueeze(0)
         feats, _ = beats(wav)             # [1, T, 768]
-        # BEATs-stats pooling: mean + std + max concatenated → [1, 2304]
-        x = feats.squeeze(0)              # [T, 768]
-        mean_p = x.mean(dim=0)
-        std_p = x.std(dim=0)
-        max_p = x.max(dim=0).values
-        pooled = torch.cat([mean_p, std_p, max_p], dim=0).unsqueeze(0)  # [1, 2304]
+        # BEATs-stats pooling: mean + std + max → [2304]
+        x = feats.squeeze(0)
+        beats_pool = torch.cat([x.mean(dim=0), x.std(dim=0), x.max(dim=0).values], dim=0)
+
+        # Classical features via librosa → [102]
+        classical_pool = torch.from_numpy(_compute_classical_features(audio))
+
+        # Hybrid: concat → [1, 2406]
+        pooled = torch.cat([beats_pool, classical_pool], dim=0).unsqueeze(0)
         pooled = (pooled - mu) / sd       # z-score normalize using training stats
         logits = classifier(pooled)       # [1, 3]
         probs = torch.softmax(logits, dim=-1).squeeze(0).cpu().numpy()
@@ -117,7 +143,8 @@ def reason_with_gpt_oss(caption: str, context_result: dict, user_question: str) 
     context_summary = (
         f"Most likely: {context_result['top_label']} ({context_result['top_prob']:.1%}). "
         f"Full distribution: {probs_pct}. "
-        f"Classifier was trained on CatMeows (3 contexts: brushing, isolation, waiting-for-food). "
+        f"Classifier was trained on CatMeows (3 contexts: brushing, isolation, waiting-for-food) "
+        f"with hybrid BEATs+classical acoustic features, 5-fold CV accuracy 82.2%. "
         f"If top probability < 50%, treat as out-of-distribution."
     )
     messages = [

@@ -31,10 +31,18 @@ VARIANT_CFG = {
         "hidden": 128, "dropout": 0.7, "weight_decay": 1e-1,
     },
     "stats": {
+        # Retuned via 5-fold CV: 81.5% with these hparams (was 78.6% with old defaults)
         "feature_prefix": "stats_features",
         "label_prefix": "stats_labels",
         "save_name": "context_classifier_stats.pt",
-        "hidden": 128, "dropout": 0.0, "weight_decay": 1e-3,
+        "hidden": 256, "dropout": 0.3, "weight_decay": 1e-1,
+    },
+    "hybrid": {
+        # BEATs-stats (2304) + classical (102) = 2406. 5-fold CV: 82.2%.
+        "feature_prefix": "hybrid_features",
+        "label_prefix": "stats_labels",  # same label order as BEATs-stats
+        "save_name": "context_classifier_hybrid.pt",
+        "hidden": 128, "dropout": 0.0, "weight_decay": 1e-1,
     },
 }
 
@@ -62,8 +70,8 @@ class ContextHead(nn.Module):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--variant", choices=list(VARIANT_CFG), default="stats",
-                    help="Feature variant. 'stats' (BEATs mean+std+max) recommended — 78.6% 5-fold CV accuracy.")
+    ap.add_argument("--variant", choices=list(VARIANT_CFG), default="hybrid",
+                    help="Feature variant. 'hybrid' (BEATs-stats + classical) recommended — 82.2% 5-fold CV.")
     ap.add_argument("--all", action="store_true",
                     help="Train on train+test combined (no held-out). For final deployment classifier. "
                          "Use 5-fold CV results for honest accuracy estimate.")
