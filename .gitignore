@@ -179,3 +179,8 @@ NatureLM/wandb/
 out/
 wandb/
 logs/
+
+# naturelm-cats additions
+inference_output.jsonl
+test_audio/
+
