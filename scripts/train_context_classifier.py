@@ -2,15 +2,15 @@
 
 Three classes: brushing, isolation_unfamiliar_environment, waiting_for_food.
 
-Architecture: [768] → Dropout(0.3) → Linear(256) → ReLU → Dropout(0.3) → Linear(3).
-Loss: CrossEntropy. Optimizer: Adam(lr=1e-3, weight_decay=1e-4).
-Stops when val accuracy stops improving for 10 epochs.
+Two feature variants supported:
+    --variant mean    (default) Mean-pooled BEATs, 768-dim
+                      Saves to context_classifier.pt
+    --variant stats   Mean+Std+Max-pooled BEATs, 2304-dim — 73.3% test acc
+                      Saves to context_classifier_stats.pt
 
-Outputs:
-    /home/scott/datasets/cats/context_classifier.pt
-    /home/scott/datasets/cats/training_log.json
-    + printed confusion matrix on test set.
+Loss: CrossEntropy. Optimizer: Adam(lr=1e-3). Hyperparams from grid sweep.
 """
+import argparse
 import json
 import time
 from pathlib import Path
@@ -22,10 +22,23 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 DATA_DIR = Path("/home/scott/datasets/cats")
-HIDDEN = 128
-DROPOUT = 0.7
+
+# Per-variant hyperparams (each won its own grid sweep)
+VARIANT_CFG = {
+    "mean": {
+        "feature_prefix": "features",
+        "save_name": "context_classifier.pt",
+        "hidden": 128, "dropout": 0.7, "weight_decay": 1e-1,
+    },
+    "stats": {
+        "feature_prefix": "stats_features",
+        "label_prefix": "stats_labels",
+        "save_name": "context_classifier_stats.pt",
+        "hidden": 128, "dropout": 0.0, "weight_decay": 1e-3,
+    },
+}
+
 LR = 1e-3
-WEIGHT_DECAY = 1e-1
 BATCH_SIZE = 32
 MAX_EPOCHS = 200
 PATIENCE = 30
@@ -48,6 +61,20 @@ class ContextHead(nn.Module):
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--variant", choices=list(VARIANT_CFG), default="stats",
+                    help="Feature variant. 'stats' (BEATs mean+std+max) recommended — 78.6% 5-fold CV accuracy.")
+    ap.add_argument("--all", action="store_true",
+                    help="Train on train+test combined (no held-out). For final deployment classifier. "
+                         "Use 5-fold CV results for honest accuracy estimate.")
+    args = ap.parse_args()
+    cfg = VARIANT_CFG[args.variant]
+    feature_prefix = cfg["feature_prefix"]
+    label_prefix = cfg.get("label_prefix", "labels")
+    save_path = DATA_DIR / cfg["save_name"]
+    hidden, dropout, weight_decay = cfg["hidden"], cfg["dropout"], cfg["weight_decay"]
+    print(f"Variant: {args.variant} → {save_path.name}  (hidden={hidden}, dropout={dropout}, wd={weight_decay})")
+
     torch.manual_seed(SEED)
     np.random.seed(SEED)
 
@@ -56,10 +83,19 @@ def main() -> int:
     n_classes = len(label_names)
     print(f"Label names: {label_names}")
 
-    X_train = torch.from_numpy(np.load(DATA_DIR / "features_train.npy")).float()
-    y_train = torch.from_numpy(np.load(DATA_DIR / "labels_train.npy")).long()
-    X_test = torch.from_numpy(np.load(DATA_DIR / "features_test.npy")).float()
-    y_test = torch.from_numpy(np.load(DATA_DIR / "labels_test.npy")).long()
+    X_train = torch.from_numpy(np.load(DATA_DIR / f"{feature_prefix}_train.npy")).float()
+    y_train = torch.from_numpy(np.load(DATA_DIR / f"{label_prefix}_train.npy")).long()
+    X_test = torch.from_numpy(np.load(DATA_DIR / f"{feature_prefix}_test.npy")).float()
+    y_test = torch.from_numpy(np.load(DATA_DIR / f"{label_prefix}_test.npy")).long()
+
+    if args.all:
+        # Merge: train on all, "test" becomes same set for monitoring only
+        X_train = torch.cat([X_train, X_test], dim=0)
+        y_train = torch.cat([y_train, y_test], dim=0)
+        X_test = X_train.clone()  # monitor only — true accuracy is from cv_results.json
+        y_test = y_train.clone()
+        save_path = save_path.with_stem(save_path.stem + "_all")
+        print(f"--all: merged train+test → {X_train.shape}. Saving to {save_path.name}")
     print(f"Train: {X_train.shape}, Test: {X_test.shape}")
 
     # Normalize features (per-feature z-score from train stats)
@@ -71,8 +107,8 @@ def main() -> int:
     train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(TensorDataset(X_test, y_test), batch_size=BATCH_SIZE, shuffle=False)
 
-    model = ContextHead(in_dim=X_train.shape[1], hidden=HIDDEN, n_classes=n_classes, dropout=DROPOUT)
-    opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    model = ContextHead(in_dim=X_train.shape[1], hidden=hidden, n_classes=n_classes, dropout=dropout)
+    opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
 
     best_test_acc = 0.0
     best_state = None
@@ -138,10 +174,10 @@ def main() -> int:
         "feature_mu": mu,
         "feature_sd": sd,
         "label_names": label_names,
-        "config": {"in_dim": X_train.shape[1], "hidden": HIDDEN, "n_classes": n_classes, "dropout": DROPOUT},
+        "config": {"in_dim": X_train.shape[1], "hidden": hidden, "n_classes": n_classes, "dropout": dropout},
         "best_test_acc": best_test_acc,
-    }, DATA_DIR / "context_classifier.pt")
-    print(f"Saved classifier to {DATA_DIR/'context_classifier.pt'}")
+    }, save_path)
+    print(f"Saved classifier to {save_path}")
 
     # Confusion matrix
     model.eval()

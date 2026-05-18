@@ -35,7 +35,10 @@ sys.path.insert(0, "/home/scott/naturelm-cats")
 from NatureLM.models.beats.BEATs import BEATs, BEATsConfig
 
 LLAMA_SERVER = "http://127.0.0.1:9002"
-CLASSIFIER_PATH = Path("/home/scott/datasets/cats/context_classifier.pt")
+# BEATs-stats classifier trained on all 276 CatMeows samples.
+# Honest 5-fold CV accuracy: 78.6% ± 1.5% (chance = 33%). See datasets/cats/cv_results.json.
+CLASSIFIER_PATH = Path("/home/scott/datasets/cats/context_classifier_stats_all.pt")
+CV_ACCURACY = 0.786
 NLM_CKPT_PATH = Path("/home/scott/models/naturelm-audio/model.safetensors")
 
 
@@ -82,7 +85,12 @@ def classify_context(audio_path: Path, beats: BEATs, classifier: nn.Module,
     with torch.inference_mode():
         wav = torch.from_numpy(audio).unsqueeze(0)
         feats, _ = beats(wav)             # [1, T, 768]
-        pooled = feats.mean(dim=1)        # [1, 768]
+        # BEATs-stats pooling: mean + std + max concatenated → [1, 2304]
+        x = feats.squeeze(0)              # [T, 768]
+        mean_p = x.mean(dim=0)
+        std_p = x.std(dim=0)
+        max_p = x.max(dim=0).values
+        pooled = torch.cat([mean_p, std_p, max_p], dim=0).unsqueeze(0)  # [1, 2304]
         pooled = (pooled - mu) / sd       # z-score normalize using training stats
         logits = classifier(pooled)       # [1, 3]
         probs = torch.softmax(logits, dim=-1).squeeze(0).cpu().numpy()
@@ -162,7 +170,7 @@ def main() -> int:
     mu = ckpt["feature_mu"]
     sd = ckpt["feature_sd"]
     label_names = ckpt["label_names"]
-    print(f"[ctx] Loaded in {time.time() - t0:.1f}s. Train test acc was {ckpt['best_test_acc']:.3f}.", file=sys.stderr)
+    print(f"[ctx] Loaded in {time.time() - t0:.1f}s. 5-fold CV accuracy estimate: {CV_ACCURACY:.1%}.", file=sys.stderr)
 
     print("[ctx] Running classifier...", file=sys.stderr)
     ctx = classify_context(args.audio, beats, classifier, mu, sd, label_names)

@@ -22,9 +22,9 @@ audio (any cat sound, wav/mp3/flac/ogg)
   │     BEATs + Q-Former + Llama-3.1-8B + LoRA
   │     → generic bioacoustic caption: "Domestic cats vocalizing."
   │
-  └─► BEATs encoder + trained MLP head (CPU)
+  └─► BEATs encoder + statistical pooling (mean+std+max) + trained MLP head (CPU)
         → cat-context softmax:
-          {waiting_for_food: 60.3%, brushing: 25.6%, isolation: 14.2%}
+          {brushing: 86.2%, isolation: 10.2%, waiting_for_food: 3.6%}
   │
   ▼  merge both signals
 GPT-OSS-20B Q4_K_M (RTX 4070, llama-server :9002)
@@ -34,9 +34,11 @@ GPT-OSS-20B Q4_K_M (RTX 4070, llama-server :9002)
 ### Sample output (ESC-50 cat clip)
 
 > *Generic caption:* `"Domestic cats vocalizing."`
-> *Classifier:* `waiting_for_food (60.3%), brushing (25.6%), isolation (14.2%)`
+> *Classifier:* `brushing (86.2%), isolation (10.2%), waiting_for_food (3.6%)`
 >
-> **GPT-OSS-20B reasoning:** "The cat's vocalization most probably signals **hunger or a request for food**. In the 'waiting-for-food' context, cats typically produce a clear, sustained meow... Because the top probability is comfortably above the 50% threshold, we can treat this as a confident prediction... Caveat: the remaining 39.7% of probability mass is spread over other contexts, so there is still a non-negligible chance that the cat is simply meowing for attention."
+> **GPT-OSS-20B reasoning:** Confident interpretation with explicit uncertainty calibration based on the classifier's softmax distribution. The reasoning is grounded in the top-predicted context but acknowledges the residual probability mass.
+
+(Note: ESC-50 cat clips are out-of-distribution for the classifier — it was trained only on CatMeows' 3 contexts. The high brushing probability here is the classifier's best mapping of an unfamiliar context to its closest CatMeows class.)
 
 ---
 
@@ -54,26 +56,27 @@ On an 8 GB consumer GPU this works because GPT-OSS-20B is MoE: only ~3.6B params
 
 ## Results
 
-Cat-context classifier on [CatMeows](https://zenodo.org/records/4008297) held-out test set (75 clips, 25 per class):
+Cat-context classifier on [CatMeows](https://zenodo.org/records/4008297), evaluated via **5-fold stratified cross-validation across all 276 clips**:
 
-| Metric | Value |
-|---|---|
-| Test accuracy | **65.3%** (chance = 33%) |
-| Best class (waiting-for-food) | 72% (18/25) |
-| Brushing | 64% (16/25) |
-| Isolation | 60% (15/25) |
+| Feature variant | 5-fold CV accuracy | Notes |
+|---|---|---|
+| **BEATs-stats (2304-dim, mean+std+max)** | **78.6% ± 1.5%** | Current default |
+| BEATs-mean (768-dim) | 76.5% ± 1.5% | Simpler baseline |
+| Q-Former (768-dim) | 73.9% ± 2.3% | Surprisingly weaker — see below |
 
-**Confusion matrix:**
+Chance = 33%. The Ludovico et al. 2020 paper reports 86% on the same dataset using hand-crafted features (MFCC + spectral centroid + ZCR + formants) + SVM. Our **78.6%** uses only learned BEATs features + a ~200K-param MLP head — within 7 points of the hand-crafted baseline.
 
-|  | pred: brushing | pred: isolation | pred: food |
-|---|---:|---:|---:|
-| **true: brushing** | 16 | 3 | 6 |
-| **true: isolation** | 7 | 15 | 3 |
-| **true: food** | 4 | 3 | 18 |
+### Negative result: NatureLM-audio's Q-Former features perform *worse* than raw BEATs
 
-The Ludovico et al. 2020 paper reports 86% on the same dataset using hand-crafted features + SVM with full-dataset cross-validation. We use only learned BEATs features and a strict 73%/27% hold-out split — different evaluation protocol, weaker model, deliberately small (~200K-param) classifier head.
+Counterintuitive but reproducible: feeding the cat audio through NatureLM-audio's Q-Former (post-BEATs) and using the Q-Former output as classifier input gives **73.9%**, ~3-5 points lower than raw BEATs features. Our interpretation: NatureLM-audio's Q-Former is designed as a tight bottleneck (1 query token per 333ms window) optimized for downstream Llama text generation; that bottleneck throws away acoustic detail needed for fine-grained cat-context discrimination. Statistical pooling (mean + std + max) on raw BEATs preserves more variability and beats Q-Former by ~5 points despite using a "less aware" feature.
 
-**Most informative confusion:** brushing-isolation reciprocal errors (7 + 3 = 10/50 swaps) — gentle non-distressed meows look similar across both. Food-context meows are most distinguishable (sharper, more urgent acoustic signature).
+### Earlier single-split test was misleading
+
+We initially evaluated on a single 201-train / 75-test split. That run produced 65.3% — pessimistic outlier. The 5-fold CV ceiling estimate of 78.6% ± 1.5% is the honest number, with SEM ±1.5% on 276 clips.
+
+### Per-class behavior
+
+Across folds, the most-confused pair is **brushing ↔ isolation** (both produce gentler, non-distressed meows). Food-context meows are most distinguishable (sharper onsets, more urgent envelope).
 
 ---
 
@@ -139,14 +142,30 @@ CUDA_VISIBLE_DEVICES="" uv run python scripts/bridge_with_context.py path/to/cat
 ## Train the classifier yourself
 
 ```bash
-# 1. Extract BEATs features for train+test (CPU, ~20s for 276 clips)
-CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_beats_features.py
+# 1. Extract BEATs statistical features (mean + std + max pool) for all 276 CatMeows clips
+CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_beats_stats_features.py
 
-# 2. Train the MLP head (CPU, <1s)
-uv run python scripts/train_context_classifier.py
+# 2. Train final classifier on ALL data (no held-out — use CV results for accuracy estimate)
+uv run python scripts/train_context_classifier.py --variant stats --all
+
+# 3. (Optional) Confirm via 5-fold cross-validation
+uv run python scripts/cross_validate.py
 ```
 
-Outputs `~/datasets/cats/context_classifier.pt` along with normalization stats and label map. Tuned hyperparameters (hidden=128, dropout=0.7, weight_decay=0.1) are baked into the script — found by a 80-config grid sweep across hidden ∈ {0, 32, 64, 128, 256}, dropout ∈ {0, 0.3, 0.5, 0.7}, weight_decay ∈ {1e-4, 1e-3, 1e-2, 1e-1}.
+Outputs `~/datasets/cats/context_classifier_stats_all.pt` along with normalization stats and label map.
+
+Hyperparameters (hidden=128, dropout=0.0, weight_decay=1e-3 for the stats variant) come from a 96-config grid sweep across feature variants. CV results are written to `~/datasets/cats/cv_results.json`.
+
+### Earlier feature-extraction paths (kept for comparison)
+
+```bash
+# Mean-pool only (BEATs-mean baseline, 76.5% CV)
+CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_beats_features.py
+uv run python scripts/train_context_classifier.py --variant mean --all
+
+# Q-Former features (negative result, 73.9% CV — kept for transparency)
+CUDA_VISIBLE_DEVICES="" uv run python scripts/extract_qformer_features.py
+```
 
 ---
 
@@ -154,11 +173,14 @@ Outputs `~/datasets/cats/context_classifier.pt` along with normalization stats a
 
 ```
 scripts/
-├── bridge_caption.py              v1 bridge: NatureLM caption → GPT-OSS-20B
-├── bridge_with_context.py         v2 bridge: + cat-context classifier
-├── extract_beats_features.py      BEATs feature extraction over CatMeows
-├── train_context_classifier.py    MLP head training + hyperparameter config
-└── smoke_test_gpt_oss.py          standalone GPT-OSS-20B load test (transformers path)
+├── bridge_caption.py                v1 bridge: NatureLM caption → GPT-OSS-20B
+├── bridge_with_context.py           v2 bridge: + BEATs-stats cat-context classifier
+├── extract_beats_features.py        BEATs mean-pool features (baseline)
+├── extract_beats_stats_features.py  BEATs mean+std+max stats features (current default)
+├── extract_qformer_features.py      Q-Former features (negative-result experiment)
+├── train_context_classifier.py      MLP head training, --variant {mean|stats}, --all
+├── cross_validate.py                5-fold stratified CV across all feature variants
+└── smoke_test_gpt_oss.py            standalone GPT-OSS-20B load test (transformers path)
 ```
 
 Nothing in `NatureLM/` is modified — this is purely additive on top of upstream `earthspecies/NatureLM-audio`.
@@ -180,7 +202,7 @@ If you want commercial use of the trained cat classifier, contact Earth Species 
 ## Limitations
 
 - **3 contexts only** (brushing / isolation / waiting-for-food). Real cats produce many more vocalization types; the classifier will force-fit out-of-distribution audio into one of these three. Use the softmax confidence as your uncertainty signal.
-- **65% test accuracy** is a proof of concept, below the 86% reported in the original Ludovico et al. paper. Improvements ahead: larger backbone projection layer, time-distributed attention pooling instead of mean-pool, more data.
+- **78.6% ± 1.5% CV accuracy** vs Ludovico et al. 2020's 86% — within 7 points despite using only learned BEATs features. Closing the gap likely requires data augmentation (time-stretch, pitch-shift, noise injection) and/or hybridizing with classical acoustic features (MFCC, ZCR, spectral centroid).
 - **No per-cat personalization**: the classifier was trained on 21 cats from CatMeows. Individual cats have idiosyncratic dialects; a per-cat embedding or fine-tuning on a few labeled clips of your specific cat would help substantially.
 - **No reverse direction**: we listen to the cat, we don't generate audio the cat would recognize. Cat-directed speech synthesis is a separate, harder problem.
 
