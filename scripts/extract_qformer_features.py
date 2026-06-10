@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Extract Q-Former features (post-cross-attention, pre-Llama-projection) for CatMeows.
 
 Pipeline replicates NatureLM-audio's encode_audio() up to but not including audio_llama_proj:

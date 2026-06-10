@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Batch-process cat audio through the bridge, save results for review.
 
 For each clip, captures:

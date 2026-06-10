@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Extract BEATs statistical-pool features WITH AUGMENTATIONS.
 
 Per source clip, produces 5 feature vectors:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Batch process many clips through bridge v3 (multi-query NatureLM + classifier).
 
 Per clip, captures:

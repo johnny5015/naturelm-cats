@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """5-fold group-aware CV with augmented training data.
 
 Per fold:

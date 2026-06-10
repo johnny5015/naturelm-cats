@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Taken from DCASE 2021 Task 5 evaluation source code
 # https://github.com/c4dm/dcase-few-shot-bioacoustic
 # MIT License

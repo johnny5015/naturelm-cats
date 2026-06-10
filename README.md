@@ -1,3 +1,5 @@
+[![BCOS Certified](https://img.shields.io/badge/BCOS-Certified-brightgreen?style=flat)](BCOS.md)
+
 # naturelm-cats
 
 **Extending [NatureLM-audio](https://github.com/earthspecies/NatureLM-audio) (Earth Species Project) to cat vocalization understanding, with a more powerful reasoning LLM bridge.**

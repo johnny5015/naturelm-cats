@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # --------------------------------------------------------
 # BEATs: Audio Pre-Training with Acoustic Tokenizers (https://arxiv.org/abs/2212.09058)
 # Github source: https://github.com/microsoft/unilm/tree/master/beats

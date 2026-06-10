@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Train an MLP classifier on BEATs features → cat-vocalization context.
 
 Three classes: brushing, isolation_unfamiliar_environment, waiting_for_food.

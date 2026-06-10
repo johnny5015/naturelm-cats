@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Module contains the audio and text processor for NatureLM-audio inference and evaluation"""
 
 import json

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # This script is based on https://github.com/salesforce/LAVIS/blob/main/lavis/runners/runner_base.py
 
 import datetime

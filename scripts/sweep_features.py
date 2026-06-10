@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """5-fold CV hyperparam sweep across feature variants.
 
 Sweeps:  hidden ∈ {0, 32, 64, 128, 256} × dropout ∈ {0, 0.3, 0.5, 0.7}

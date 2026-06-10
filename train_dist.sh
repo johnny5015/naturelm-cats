@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 
 export NCCL_PROTO=simple
 export FI_EFA_FORK_SAFE=1

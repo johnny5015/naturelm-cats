@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Copyright (2024) Earth Species Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

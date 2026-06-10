@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Smoke test: load GPT-OSS-20B with MoE expert offload, generate 20 tokens, measure VRAM.
 
 Goal: validate that the 4070 can host the BF16 backbone while experts page from CPU RAM.

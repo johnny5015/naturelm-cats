@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Caption-bridge MVP: NatureLM-audio (CPU/4-bit) → GPT-OSS-20B (llama-server).
 
 Pipeline:

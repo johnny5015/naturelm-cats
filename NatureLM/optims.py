@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # This script is from https://github.com/salesforce/LAVIS/blob/main/lavis/common/optims.py
 
 import logging

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Sara recorder — interactive corpus-collection tool for cat vocalizations.
 
 Captures audio + your contextual notes per clip. Saves to ~/sara-corpus/{timestamp}/

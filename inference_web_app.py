@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import re
 import tempfile
 from collections import Counter

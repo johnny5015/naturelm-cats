@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Probe NatureLM-audio with multiple query framings per clip.
 
 Goal: find queries that produce informative captions instead of "None"

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Extract BEATs features for openfarm-catmeows train+test parquet rows.
 
 BEATs encoder (loaded from NatureLM-audio's checkpoint, beats.* prefix subset).

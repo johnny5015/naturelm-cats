@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Bridge v2: NatureLM-audio caption + BEATs cat-context classifier → GPT-OSS-20B reasoning.
 
 Pipeline (all CPU for audio side, GPU for LLM):

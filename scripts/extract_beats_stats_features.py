@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Extract BEATs features with statistical pooling (mean + std + max).
 
 Same audio path as extract_beats_features.py, but instead of mean-only pooling

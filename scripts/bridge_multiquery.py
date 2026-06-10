@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Bridge v3: multi-query NatureLM + hybrid classifier + GPT-OSS-20B.
 
 Hits NatureLM-audio with three complementary queries per clip:

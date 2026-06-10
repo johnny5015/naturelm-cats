@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Extract classical acoustic features per CatMeows clip.
 
 Per clip, computes (all via librosa) and pools mean + std over time:

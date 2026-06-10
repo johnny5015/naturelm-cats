@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import datetime
 import logging
 import time

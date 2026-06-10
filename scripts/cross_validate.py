@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """5-fold stratified cross-validation across three feature variants.
 
 Combines train + test (276 total samples), 5 stratified folds (~55 test per fold).

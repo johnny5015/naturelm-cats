@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Run NatureLM-audio over a set of audio files paths or a directory with audio files."""
 
 import argparse

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Module for training utilities.
 
 This module contains utility functions for training models. For example, saving model checkpoints.
